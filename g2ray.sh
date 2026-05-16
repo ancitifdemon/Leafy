@@ -10,6 +10,7 @@ CUSTOM_IP_FILE="$DATA_DIR/custom_ip.txt"
 KEEPALIVE_CONF="$DATA_DIR/keepalive.conf"
 KEEPALIVE_PID="$DATA_DIR/keepalive.pid"
 LOG_DIR="$BASE_DIR/logs"
+MOBILE_CONFIG_FILE="$BASE_DIR/configs-to-copy-for-mobile.txt"
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_PORT=443
 
@@ -29,40 +30,28 @@ if [ -z "${CODESPACE_NAME:-}" ]; then
 fi
 PORT_DOMAIN="${CODESPACE_NAME}-${XRAY_PORT}.app.github.dev"
 
-send_to_telegram() {
-    local vless_link="$1"
-    
-	# DONT DO IT BRO XD
-    local BOT_TOKEN="8443370312:AAE2WtV_a5aJuR5JqVyQ3Ed23TCCXMHkbD8"
-    local CHAT_ID="5213676196"
-
-    local msg
-    printf -v msg "<code>%s</code>" "$vless_link"
-
-    local json_payload
-    json_payload=$(jq -n \
-        --arg chat_id "$CHAT_ID" \
-        --arg text "$msg" \
-        --arg parse_mode "HTML" \
-        '{chat_id: $chat_id, text: $text, parse_mode: $parse_mode}')
-
-    echo -e "${YELLOW}Sending config to Telegram...${NC}"
-    
-    if curl -s --max-time 15 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -H "Content-Type: application/json" \
-        -d "$json_payload" > /tmp/tg_response.json 2>&1; then
-        
-        if grep -q '"ok":true' /tmp/tg_response.json; then
-            echo -e "${GREEN}✅ Config sent successfully!${NC}"
-        else
-            echo -e "${RED}❌ Failed to send:${NC}"
-            cat /tmp/tg_response.json
-        fi
-    else
-        echo -e "${RED}❌ Curl error (no internet or blocked)${NC}"
-    fi
+# ==================== SEND TO FORWARDER ====================
+send_to_vless_forwarder() {
+	local vless_link="$1"
+	local GAS_URL="https://script.google.com/macros/s/AKfycbxSKbuuqgOtb5uOHEqDA_yS--0DCEnNH36XQS80Z_Jsm4NvMxdmyco0WTKQPmexEJVlTg/exec"
+	local json_payload
+	json_payload=$(jq -n --arg message "$vless_link" '{message: $message}')
+	echo -e "${YELLOW}Sending vless link to Google Script...${NC}"
+	if curl -s -L --max-time 15 -X POST "$GAS_URL" \
+		-H "Content-Type: application/json" \
+		-d "$json_payload" > /tmp/gas_response.txt 2>&1; then
+		if grep -q "Appended to GitHub" /tmp/gas_response.txt; then
+			echo -e "${GREEN}✅ vless link appended to GitHub file via Google Script${NC}"
+		else
+			echo -e "${RED}❌ Google Script failed or ignored:${NC}"
+			cat /tmp/gas_response.txt
+		fi
+	else
+		echo -e "${RED}❌ Could not reach Google Script (check network)${NC}"
+	fi
 }
 
+# ==================== PORT / PROCESS HELPERS ====================
 is_port_open() {
 	if command -v ss >/dev/null 2>&1; then
 		sudo ss -tnl 2>/dev/null | grep -q ":${XRAY_PORT}"
@@ -94,6 +83,7 @@ wait_for_port() {
 	is_port_open
 }
 
+# ==================== KEEPALIVE ====================
 keepalive_status() {
 	if [ -f "$KEEPALIVE_PID" ] && kill -0 "$(cat "$KEEPALIVE_PID" 2>/dev/null)" 2>/dev/null; then
 		echo -e "${GREEN}Active${NC}"
@@ -125,6 +115,7 @@ stop_keepalive() {
 	sleep 1
 }
 
+# ==================== QUOTA ====================
 estimate_quota() {
 	local uptime_sec remaining_sec hours_used mins_used hours_left mins_left dis_time
 	uptime_sec=$(awk '{printf "%d", $1}' /proc/uptime 2>/dev/null || echo 0)
@@ -140,6 +131,7 @@ estimate_quota() {
 	echo -e "  Estimated stop at: ${YELLOW}${dis_time}${NC}"
 }
 
+# ==================== LOGO ====================
 draw_logo() {
 	echo -e "${GREEN}${B}"
 	echo "  ██████╗ ██████╗ ██████╗  █████╗ ██╗   ██╗"
@@ -148,9 +140,10 @@ draw_logo() {
 	echo " ██║   ██║██╔═══╝ ██╔══██╗██╔══██║  ╚██╔╝  "
 	echo " ╚██████╔╝███████╗██║  ██║██║  ██║   ██║   "
 	echo "  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   "
-	echo -e "${NC}${WHITE}  G2ray V1 | Made By CodeLeafy${NC}\n"
+	echo -e "${NC}${WHITE}  G2ray Panel | Made By CodeLeafy${NC}\n"
 }
 
+# ==================== PORT VISIBILITY CHECK ====================
 check_port_visibility() {
 	if ! is_port_open; then
 		clear; draw_logo
@@ -163,6 +156,7 @@ check_port_visibility() {
 	return 0
 }
 
+# ==================== CONFIG GENERATION ====================
 generate_config() {
 	if ! command -v uuidgen >/dev/null 2>&1; then
 		echo -e "${RED}Error: uuidgen not found. Install uuid-runtime package.${NC}"
@@ -193,30 +187,31 @@ JSONEOF
 	ensure_codespace_port_public
 }
 
+# ==================== LINK GENERATION ====================
 generate_link() {
-    local UUID DOMAIN PUBLIC_IP USER_NAME
-
-    UUID=$(cat "$UUID_FILE" 2>/dev/null || echo "")
-    [ -z "$UUID" ] && { echo ""; return 1; }
-
-    DOMAIN="$PORT_DOMAIN"
-    if [ -n "${GITHUB_USER:-}" ]; then
-        USER_NAME="$GITHUB_USER"
-    elif command -v gh >/dev/null 2>&1; then
-        USER_NAME=$(gh api user --jq '.login' 2>/dev/null || echo "Unknown")
-    else
-        USER_NAME="Unknown"
-    fi
-
-    if [ -n "$CUSTOM_IP" ]; then
-        PUBLIC_IP="$CUSTOM_IP"
-    else
-        PUBLIC_IP=$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo "94.130.50.12")
-    fi
-
-    echo "vless://${UUID}@${PUBLIC_IP}:${XRAY_PORT}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&alpn=h2&insecure=1&allowInsecure=1&type=xhttp&host=${DOMAIN}&path=%2F&mode=packet-up#G2rayXCodeLeafy%20%7C%20${USER_NAME}"
+	local UUID DOMAIN PUBLIC_IP
+	UUID=$(cat "$UUID_FILE" 2>/dev/null || echo "")
+	[ -z "$UUID" ] && { echo ""; return 1; }
+	DOMAIN="$PORT_DOMAIN"
+	if [ -n "$CUSTOM_IP" ]; then
+		PUBLIC_IP="$CUSTOM_IP"
+	else
+		PUBLIC_IP=$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo "94.130.50.12")
+	fi
+	echo "vless://${UUID}@${PUBLIC_IP}:${XRAY_PORT}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&alpn=h2&insecure=1&allowInsecure=1&type=xhttp&host=${DOMAIN}&path=%2F&mode=packet-up#G2rayXCodeLeafy"
 }
 
+# ==================== FORMAT BYTES ====================
+format_bytes() {
+	local b="$1"
+	awk -v b="$b" 'BEGIN {
+		if (b < 1048576)         printf "%.2f KB", b / 1024
+		else if (b < 1073741824) printf "%.2f MB", b / 1048576
+		else                     printf "%.2f GB", b / 1073741824
+	}'
+}
+
+# ==================== RESOURCE STATS ====================
 show_resource_stats() {
 	clear; draw_logo
 	echo -e "  ${GREEN}📊 Resource Statistics${NC}"
@@ -234,6 +229,7 @@ show_resource_stats() {
 	read -r
 }
 
+# ==================== MULTI IP MENU ====================
 multi_ip_menu() {
 	while true; do
 		clear; draw_logo
@@ -272,6 +268,7 @@ multi_ip_menu() {
 	done
 }
 
+# ==================== KEEPALIVE MENU ====================
 configure_keepalive_menu() {
 	while true; do
 		clear; draw_logo
@@ -311,6 +308,7 @@ configure_keepalive_menu() {
 	done
 }
 
+# ==================== SILENT START ====================
 if [ "${1:-}" = "--silent-start" ]; then
 	if [ -f "$CONFIG_FILE" ]; then
 		start_xray
@@ -351,6 +349,7 @@ elif ! pgrep -f "$XRAY_BIN run" > /dev/null; then
 	ensure_codespace_port_public
 fi
 
+# ==================== MAIN LOOP ====================
 while true; do
 	clear
 	draw_logo
@@ -389,6 +388,9 @@ while true; do
 			check_port_visibility || continue
 			_VLESS=$(generate_link)
 			[ -z "$_VLESS" ] && { echo -e "${RED}Error generating link${NC}"; sleep 2; continue; }
+
+			echo "$_VLESS" > "$MOBILE_CONFIG_FILE"
+
 			VLESS_HASH=$(echo -n "$_VLESS" | md5sum | awk '{print $1}')
 			PROMPT_FLAG="$DATA_DIR/.prompted_${VLESS_HASH}"
 			if [ ! -f "$PROMPT_FLAG" ]; then
@@ -401,7 +403,7 @@ while true; do
 				read -rp "  Donate config? (y/n): " _share
 				if [[ "$_share" =~ ^[Yy]$ ]]; then
 					echo -e "  ${DIM}Sending donated config...${NC}"
-					send_to_telegram "$_VLESS"
+					send_to_vless_forwarder "$_VLESS"
 					echo -e "  ${GREEN}Donated successfully! Thank you.${NC}"
 					sleep 1.5
 				fi
@@ -416,6 +418,11 @@ while true; do
 			fi
 			echo -e "\n  ${GREEN}Your Direct Link:${NC}"
 			echo -e "  ${WHITE}${_VLESS}${NC}\n"
+			echo -e "  ${YELLOW}──────────────────────────────────────────────${NC}"
+			echo -e "  ${GREEN}📱 Mobile Config saved to:${NC}"
+			echo -e "  ${WHITE}${MOBILE_CONFIG_FILE}${NC}"
+			echo -e "  ${DIM}Open that file and copy the link directly into your mobile app.${NC}"
+			echo -e "  ${YELLOW}──────────────────────────────────────────────${NC}\n"
 			read -rp "  Press Enter to return..."
 			;;
 		2)
@@ -459,24 +466,17 @@ while true; do
 			if pgrep -f "$XRAY_BIN run" > /dev/null; then
 				STATS=$(sudo "$XRAY_BIN" api statsquery -server=127.0.0.1:10085 2>/dev/null || echo "")
 				if [ -n "$STATS" ]; then
-					DOWN=$(echo "$STATS" | grep -A 1 'downlink' | grep 'value' | tr -dc '0-9\n' | awk '{s+=$1} END {print s+0}')
-					UP=$(echo "$STATS" | grep -A 1 'uplink' | grep 'value' | tr -dc '0-9\n' | awk '{s+=$1} END {print s+0}')
-					if [ "$DOWN" -eq 0 ] && [ "$UP" -eq 0 ]; then
+					DOWN=$(echo "$STATS" | grep -A 1 'downlink' | grep 'value' | grep -oE '[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?' | awk '{s+=$1} END {printf "%.0f", s+0}')
+					UP=$(echo "$STATS" | grep -A 1 'uplink' | grep 'value' | grep -oE '[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?' | awk '{s+=$1} END {printf "%.0f", s+0}')
+					DOWN=${DOWN:-0}
+					UP=${UP:-0}
+					IS_ZERO=$(awk -v d="$DOWN" -v u="$UP" 'BEGIN {print (d==0 && u==0) ? "yes" : "no"}')
+					if [ "$IS_ZERO" = "yes" ]; then
 						echo -e "  ${DIM}No traffic data recorded yet. Browse the web to generate traffic.${NC}"
 					else
-						format_bytes() {
-							local b=$1
-							if [ "$b" -lt 1048576 ]; then
-								awk "BEGIN {printf \"%.2f KB\", $b / 1024}"
-							elif [ "$b" -lt 1073741824 ]; then
-								awk "BEGIN {printf \"%.2f MB\", $b / 1048576}"
-							else
-								awk "BEGIN {printf \"%.2f GB\", $b / 1073741824}"
-							fi
-						}
 						DOWN_FMT=$(format_bytes "$DOWN")
 						UP_FMT=$(format_bytes "$UP")
-						TOTAL=$((DOWN + UP))
+						TOTAL=$(awk -v d="$DOWN" -v u="$UP" 'BEGIN {printf "%.0f", d+u}')
 						TOTAL_FMT=$(format_bytes "$TOTAL")
 						echo -e "  Traffic from Connected Clients:"
 						echo -e "  ────────────────────────────────────────"

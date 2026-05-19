@@ -4,11 +4,9 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ==================== MODERN COLORS ====================
 GREEN='\033[1;32m'; WHITE='\033[1;37m'; RED='\033[1;31m'
 YELLOW='\033[1;33m'; DIM='\033[2m'; NC='\033[0m'; B='\033[1m'
 
-# ==================== PATHS =====================
 DATA_DIR="$BASE_DIR/data"
 CONFIG_FILE="$DATA_DIR/config.json"
 UUID_FILE="$DATA_DIR/uuid.txt"
@@ -24,7 +22,6 @@ XRAY_PORT=443
 
 mkdir -p "$DATA_DIR" "$LOG_DIR"
 
-# ==================== INIT PERSISTENT FILES ====================
 [ ! -f "$SAVED_BYTES_FILE" ]   && echo '{"down":0,"up":0}' > "$SAVED_BYTES_FILE"
 [ ! -f "$SESSION_BYTES_FILE" ] && echo '{"down":0,"up":0}' > "$SESSION_BYTES_FILE"
 [ ! -f "$TOTAL_UPTIME_FILE" ]  && echo "0"                 > "$TOTAL_UPTIME_FILE"
@@ -63,7 +60,7 @@ draw_logo() {
     echo -e "   ██║   ██║██╔═══╝ ██╔══██╗██╔══██║  ╚██╔╝  "
     echo -e "   ╚██████╔╝███████╗██║  ██║██║  ██║   ██║   "
     echo -e "    ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ${NC}"
-    echo -e "       ${WHITE}${B}v1.4.1${NC} ${DIM}•${NC} ${WHITE}Made by CodeLeafy${NC}\n"
+    echo -e "       ${WHITE}${B}v1.4.2${NC} ${DIM}•${NC} ${WHITE}Made by CodeLeafy${NC}\n"
 }
 
 refresh_screen() {
@@ -76,21 +73,21 @@ refresh_screen() {
 check_for_updates() {
     clear
     draw_logo
-    
+
     local tmp_file="/tmp/g2ray_remote.sh"
     curl -s -m 5 -L "https://raw.githubusercontent.com/Code-Leafy/G2rayXCodeLeafy/main/g2ray.sh" -o "$tmp_file" &
     local pid=$!
-    
+
     local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
     local i=0
-    
+
     while kill -0 $pid 2>/dev/null; do
         printf "\r  %b%s%b %bChecking for latest updates...%b" "$GREEN" "${frames[i]}" "$NC" "$WHITE" "$NC"
         i=$(( (i + 1) % 10 ))
         sleep 0.1
     done
     wait $pid
-    
+
     if [ -f "$tmp_file" ] && grep -q "G2ray Panel" "$tmp_file"; then
         if ! cmp -s "$0" "$tmp_file"; then
             printf "\r  %b✔%b %bUpdate found! Installing...              %b\n" "$GREEN" "$NC" "$WHITE" "$NC"
@@ -218,14 +215,14 @@ save_session_uptime() {
 # ==================== ENGINE & RESTART PROCEDURES ====================
 stop_xray() {
     save_xray_stats 2>/dev/null || true
-    sudo pkill -f "$XRAY_BIN run" 2>/dev/null || true
-    sudo pkill -x "xray" 2>/dev/null || true
+    sudo pkill -f "$XRAY_BIN run" >/dev/null 2>&1 || true
+    sudo pkill -x "xray" >/dev/null 2>&1 || true
     sleep 0.5
-    sudo pkill -9 -f "$XRAY_BIN run" 2>/dev/null || true
-    sudo pkill -9 -x "xray" 2>/dev/null || true
+    sudo pkill -9 -f "$XRAY_BIN run" >/dev/null 2>&1 || true
+    sudo pkill -9 -x "xray" >/dev/null 2>&1 || true
     if command -v fuser >/dev/null 2>&1; then
-        sudo fuser -k -9 ${XRAY_PORT}/tcp 2>/dev/null || true
-        sudo fuser -k -9 10085/tcp 2>/dev/null || true
+        sudo fuser -k -9 ${XRAY_PORT}/tcp >/dev/null 2>&1 || true
+        sudo fuser -k -9 10085/tcp >/dev/null 2>&1 || true
     fi
     sleep 0.5; return 0
 }
@@ -267,7 +264,7 @@ _background_tasks() {
         save_xray_stats >/dev/null 2>&1 || true
         save_session_uptime >/dev/null 2>&1 || true
         _tick=$(( _tick + 1 ))
-        if [ "$_tick" -ge 10 ]; then fetch_remote_message; _tick=0; fi
+        if [ "$_tick" -ge 3 ]; then fetch_remote_message; _tick=0; fi
     done
 }
 
@@ -416,7 +413,7 @@ do_donate_config() {
     echo -e "  ${WHITE}Help others connect securely for free.${NC}"
     echo -e "  ${DIM}• No speed or quota penalty.${NC}"
     echo -e "  ${DIM}• IP is already public; no extra risk.${NC}\n"
-    
+
     echo -ne "  ${GREEN}╰─❯${NC} Confirm donation? (y/n): "
     read -r _d
     if [[ "$_d" =~ ^[Yy]$ ]]; then
@@ -429,21 +426,23 @@ do_donate_config() {
 force_reconnect() {
     local no_prompt="${1:-}"
     echo -e "\n  ${GREEN}⠋${NC} ${WHITE}Running Clean Hard Restart & Reconnect Sequence...${NC}\n"
-    
+
     echo -ne "  ${DIM}├─${NC} Detect Identity   : "
     CODESPACE_NAME=$(_detect_codespace_name 2>/dev/null || true)
     PORT_DOMAIN="${CODESPACE_NAME}-${XRAY_PORT}.app.github.dev"
     [[ "$CODESPACE_NAME" == "unknown-codespace" ]] && echo -e "${RED}Failed${NC}" || echo -e "${GREEN}${CODESPACE_NAME}${NC}"
 
     echo -ne "  ${DIM}├─${NC} Force Kill Engine : "
-    stop_xray
+    ( stop_xray ) >/dev/null 2>&1
     echo -e "${GREEN}Done${NC}"
 
     echo -ne "  ${DIM}├─${NC} Start Engine      : "
-    start_xray; wait_for_port >/dev/null 2>&1 && echo -e "${GREEN}OK${NC}" || echo -e "${RED}Failed${NC}"
+    ( start_xray ) >/dev/null 2>&1
+    ( wait_for_port ) >/dev/null 2>&1 && echo -e "${GREEN}OK${NC}" || echo -e "${RED}Failed${NC}"
 
     echo -ne "  ${DIM}├─${NC} Expose Tunnel     : "
-    ensure_codespace_port_public; echo -e "${GREEN}Done${NC}"
+    ( ensure_codespace_port_public ) >/dev/null 2>&1
+    echo -e "${GREEN}Done${NC}"
 
     echo -ne "  ${DIM}╰─${NC} Verify External   : "
     local _ok=false
@@ -452,11 +451,11 @@ force_reconnect() {
         sleep 2
     done
     [ "$_ok" = "true" ] && echo -e "${GREEN}Live!${NC}\n" || echo -e "${YELLOW}Pending / Delayed${NC}\n"
-    
-    if [ "$no_prompt" != "--no-prompt" ]; then 
+
+    if [ "$no_prompt" != "--no-prompt" ]; then
         echo -ne "  ${DIM}Press Enter to return...${NC}"
         read -r
-    else 
+    else
         sleep 1
     fi
 }
@@ -491,6 +490,8 @@ fi
 
 # ==================== MAIN LOOP ====================
 while true; do
+    fetch_remote_message &
+
     refresh_screen
 
     if pgrep -x "xray" >/dev/null 2>&1 || pgrep -f "$XRAY_BIN run" > /dev/null 2>&1; then
@@ -524,7 +525,7 @@ while true; do
     echo ""
     echo -e "   ${RED}0)${NC} Exit Panel"
     echo -e "  ${DIM}───────────────────────────────────────────────────────────${NC}"
-    
+
     if [ -s "/tmp/g2ray_message.txt" ]; then
         _MSG_CONTENT=$(cat /tmp/g2ray_message.txt 2>/dev/null | sed 's/\r//g')
         if [[ "$_MSG_CONTENT" != *"404: Not Found"* ]] && [[ "$_MSG_CONTENT" != *"404"* ]] && [ -n "$(echo "$_MSG_CONTENT" | tr -d ' \n\t')" ]; then
@@ -542,7 +543,7 @@ while true; do
             _VLESS=$(generate_link)
             [ -z "$_VLESS" ] && { echo -e "  ${RED}✖ Error generating link.${NC}"; sleep 2; continue; }
             echo "$_VLESS" > "$MOBILE_CONFIG_FILE"
-            
+
             VLESS_HASH=$(echo -n "$_VLESS" | md5sum | awk '{print $1}')
             PROMPT_FLAG="$DATA_DIR/.prompted_${VLESS_HASH}"
             if [ ! -f "$PROMPT_FLAG" ]; then
